@@ -1,0 +1,122 @@
+trigger:
+- main
+
+pool:
+  vmImage: 'windows-latest'
+
+variables:
+  buildConfiguration: 'Release'
+  resultsDirectory: 'TestResults'
+
+steps:
+- task: UseDotNet@2
+  inputs:
+    packageType: 'sdk'
+    version: '6.x'
+    installationPath: $(Agent.ToolsDirectory)/dotnet
+
+- script: |
+    dotnet restore
+    dotnet tool install --global Microsoft.Playwright.CLI
+    playwright install
+  displayName: 'Install Dependencies'
+
+- script: |
+    dotnet test --configuration $(buildConfiguration) --results-directory $(resultsDirectory) --logger "trx;LogFileName=test_results.trx" --collect:"XPlat Code Coverage" -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=json,cobertura
+  displayName: 'Run Tests in Parallel'
+
+- task: PublishTestResults@2
+  inputs:
+    testResultsFormat: 'VSTest'
+    testResultsFiles: '**/*.trx'
+    searchFolder: '$(resultsDirectory)'
+    mergeTestResults: true
+    failTaskOnFailedTests: true
+  displayName: 'Publish Test Results'
+
+- task: PublishCodeCoverageResults@1
+  inputs:
+    codeCoverageTool: 'Cobertura'
+    summaryFileLocation: '$(resultsDirectory)/**/coverage.cobertura.xml'
+  displayName: 'Publish Code Coverage'
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    PathtoPublish: '$(resultsDirectory)'
+    ArtifactName: 'TestResults'
+    publishLocation: 'Container'
+  displayName: 'Publish Test Artifacts for Dashboard'
+
+
+- script: |
+    dotnet tool install --global Allure.Commons
+    mkdir AllureResults
+    dotnet test --configuration $(buildConfiguration) --results-directory $(resultsDirectory) --logger "trx;LogFileName=test_results.trx" -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=json,cobertura
+  displayName: 'Run Tests and Collect Allure Results'
+
+- script: |
+    allure generate $(resultsDirectory) -o AllureReport --clean
+  displayName: 'Generate Allure Report'
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    PathtoPublish: 'AllureReport'
+    ArtifactName: 'AllureReport'
+    publishLocation: 'Container'
+  displayName: 'Publish Allure Report'
+
+
+- task: PowerShell@2
+  inputs:
+    targetType: 'inline'
+    script: |
+      $status = "$(Build.Status)"
+      $link = "$(System.TeamFoundationCollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)"
+      $body = @"
+      <html>
+      <body>
+      <h2>Playwright Test Summary</h2>
+      <p><strong>Build:</strong> #$(Build.BuildNumber)</p>
+      <p><strong>Status:</strong> $status</p>
+      <p><a href='$link'>View Full Test Report</a></p>
+      </body>
+      </html>
+      "@
+
+      Send-MailMessage -To "your-email@example.com" -From "ado-notify@example.com" -Subject "Playwright Test Results - $(Build.BuildNumber)" -BodyAsHtml -Body $body -SmtpServer "smtp.example.com"
+  condition: always()
+  displayName: 'Send HTML Email Notification'
+
+- task: HttpRequest@2
+  inputs:
+    connectedServiceName: ''
+    url: 'https://outlook.office.com/webhook/your-teams-webhook-url'
+    method: 'POST'
+    headers: |
+      Content-Type: application/json
+    body: |
+      {
+        "@type": "MessageCard",
+        "@context": "http://schema.org/extensions",
+        "summary": "Playwright Test Notification",
+        "themeColor": "0076D7",
+        "title": "Playwright Build Notification",
+        "sections": [{
+          "activityTitle": "Build #$(Build.BuildNumber)",
+          "activitySubtitle": "$(Build.Status)",
+          "facts": [
+            { "name": "Project", "value": "$(System.TeamProject)" },
+            { "name": "Build ID", "value": "$(Build.BuildId)" }
+          ],
+          "markdown": true
+        }],
+        "potentialAction": [{
+          "@type": "OpenUri",
+          "name": "View Results",
+          "targets": [
+            { "os": "default", "uri": "$(System.TeamFoundationCollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)" }
+          ]
+        }]
+      }
+  condition: always()
+  displayName: 'Notify Teams Channel'
