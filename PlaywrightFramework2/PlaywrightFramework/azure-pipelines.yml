@@ -1,0 +1,38 @@
+trigger:
+- main
+
+pool:
+  vmImage: 'windows-latest'
+
+variables:
+  buildConfiguration: 'Release'
+  resultsDirectory: 'TestResults'
+
+steps:
+- task: UseDotNet@2
+  inputs:
+    packageType: 'sdk'
+    version: '8.x'
+    installationPath: $(Agent.ToolsDirectory)/dotnet
+
+- script: |
+    dotnet restore
+    dotnet tool install --global Microsoft.Playwright.CLI
+    playwright install
+  displayName: 'Install Dependencies'
+
+- script: |
+    dotnet test --configuration $(buildConfiguration) --results-directory $(resultsDirectory) --logger "trx;LogFileName=test_results.trx"
+  displayName: 'Run Tests and Collect Results'
+
+- script: |
+    dotnet tool install --global Allure.Commons
+    allure generate $(resultsDirectory) -o AllureReport --clean
+  displayName: 'Generate Allure Report'
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    PathtoPublish: 'AllureReport'
+    ArtifactName: 'AllureReport'
+    publishLocation: 'Container'
+  displayName: 'Publish Allure Report'
